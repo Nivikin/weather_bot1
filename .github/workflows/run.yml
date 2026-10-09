@@ -1,0 +1,32 @@
+name: Yandex Weather Auto Confirm
+
+on:
+  schedule:
+    # Запуск каждые 10 минут
+    - cron: '*/10 * * * *'
+  # Возможность ручного запуска кнопкой
+  workflow_dispatch:
+
+jobs:
+  confirm-weather:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Playwright
+        run: |
+          python -m pip install --upgrade pip
+          pip install playwright
+          playwright install --with-deps chromium
+
+      - name: Run script
+        env:
+          YANDEX_COOKIE: ${{ secrets.YANDEX_COOKIE }}
+        run: python weather_bot.py
