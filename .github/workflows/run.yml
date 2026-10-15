@@ -4,8 +4,10 @@ on:
   schedule:
     # Запуск каждые 10 минут
     - cron: '*/10 * * * *'
-  # Возможность ручного запуска кнопкой
   workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
   confirm-weather:
@@ -20,13 +22,37 @@ jobs:
         with:
           python-version: '3.11'
 
+      - name: Cache Playwright browsers
+        id: playwright-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-chromium
+
       - name: Install Playwright
         run: |
-          python -m pip install --upgrade pip
           pip install playwright
-          playwright install --with-deps chromium
+          if [ "${{ steps.playwright-cache.outputs.cache-hit }}" != "true" ]; then
+            playwright install --with-deps chromium
+          else
+            playwright install-deps chromium
+          fi
 
       - name: Run script
         env:
           YANDEX_COOKIE: ${{ secrets.YANDEX_COOKIE }}
         run: python weather_bot.py
+
+      # Раз в неделю обновляет пустой коммит, чтобы GitHub не отключил cron через 60 дней
+      - name: Keep workflow alive (100+ days)
+        if: github.event.schedule != ''
+        run: |
+          DAY=$(date +%u)
+          HOUR=$(date +%H)
+          MIN=$(date +%M)
+          if [ "$DAY" = "1" ] && [ "$HOUR" = "12" ] && [ "$MIN" -lt "15" ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git commit --allow-empty -m "Keep schedule alive"
+            git push || true
+          fi
