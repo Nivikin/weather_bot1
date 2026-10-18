@@ -9,18 +9,20 @@ import base64
 import urllib.parse
 from playwright.sync_api import sync_playwright
 
-TARGET_URL = "https://yandex.by/pogoda/ru/bataysk?lat=47.138333&lon=39.744469"
-POST_URL = "https://yandex.by/pogoda/ru/bataysk"
+# Работаем строго с yandex.ru, где привязан аккаунт и счетчик 100 дней
+TARGET_URL = "https://yandex.ru/pogoda/ru/bataysk?lat=47.138333&lon=39.744469"
+POST_URL = "https://yandex.ru/pogoda/ru/bataysk"
 COOKIE_STRING = os.environ.get("YANDEX_COOKIE", "")
 
 def parse_cookies(cookie_str: str):
-    """Очищает и преобразует строку Cookie для .yandex.by и .yandex.ru."""
+    """Очищает строку Cookie от лишних префиксов и экранирований."""
     cookie_str = cookie_str.strip()
     if cookie_str.lower().startswith("cookie:"):
         cookie_str = cookie_str[7:].strip()
+    # На случай если строка скопирована из Windows cURL
+    cookie_str = cookie_str.replace("^|", "|").replace("^%", "%").replace('^"', '')
 
     cookies = []
-    domains = [".yandex.by", ".yandex.ru"]
     for item in cookie_str.split(";"):
         item = item.strip()
         if not item or "=" not in item:
@@ -29,17 +31,16 @@ def parse_cookies(cookie_str: str):
         name, val = name.strip(), val.strip()
         if not name:
             continue
-        for d in domains:
-            cookies.append({
-                "name": name,
-                "value": val,
-                "domain": d,
-                "path": "/"
-            })
+        cookies.append({
+            "name": name,
+            "value": val,
+            "domain": ".yandex.ru",
+            "path": "/"
+        })
     return cookies
 
 def decrypt_yandex_scripts(html: str) -> str:
-    """Расшифровывает XOR-скрипты Яндекса вида Hg0U(atob(`...`), `key`) из HTML."""
+    """Расшифровывает XOR-скрипты Яндекса из HTML."""
     decoded_chunks = []
     pattern = r'atob\(`([^`]+)`\)\s*,\s*`([^`]+)`'
     for b64_data, key in re.findall(pattern, html):
@@ -59,6 +60,13 @@ def main():
         print("[!] Ошибка: секрет YANDEX_COOKIE пуст.")
         sys.exit(1)
 
+    parsed_cookies = parse_cookies(COOKIE_STRING)
+    cookie_names = {c["name"]: c["value"] for c in parsed_cookies}
+
+    has_session = "Session_id" in cookie_names and "..." not in cookie_names["Session_id"] and "…" not in cookie_names["Session_id"]
+    login_from_cookie = cookie_names.get("yandex_login", "Не найден в куках")
+    print(f"[*] Проверка куков -> Логин: {login_from_cookie} | Ключ Session_id передан: {'Да' if has_session else 'НЕТ (ОШИБКА!)'}")
+
     with sync_playwright() as p:
         browser = p.chromium.launch(
             headless=True,
@@ -74,7 +82,7 @@ def main():
             permissions=["geolocation"]
         )
 
-        context.add_cookies(parse_cookies(COOKIE_STRING))
+        context.add_cookies(parsed_cookies)
         page = context.new_page()
 
         print(f"[*] Открываем {TARGET_URL}...")
@@ -86,7 +94,6 @@ def main():
 
         html = page.content()
 
-        # 1. Собираем расшифрованные данные из памяти браузера и из XOR-скриптов HTML
         try:
             next_f_data = page.evaluate("() => JSON.stringify(window.__next_f || [])")
         except Exception:
@@ -94,24 +101,22 @@ def main():
 
         decrypted_text = decrypt_yandex_scripts(html) + "\n" + next_f_data
 
-        is_logged_in = "Nivikin123" in decrypted_text
-        print(f"[*] Авторизация (Nivikin123) после расшифровки: {'Да' if is_logged_in else 'Нет'}")
+        is_logged_in = ("Nivikin123" in decrypted_text) or ("Nivikin123" in html)
+        print(f"[*] Авторизация на странице yandex.ru (Nivikin123): {'Да' if is_logged_in else 'Нет'}")
 
-        # 2. Извлекаем свежий CSRF-токен sk (формат: 40 hex-символов : 10 цифр времени)
         sk_match = (
             re.search(r'"sk"\s*:\s*"([a-f0-9]{40}:\d{10})"', decrypted_text)
             or re.search(r'([a-f0-9]{40}:\d{10})', decrypted_text)
         )
 
         if not sk_match:
-            print("[x] Не удалось извлечь свежий токен sk со страницы. Проверьте свежесть куков.")
+            print("[x] Не удалось извлечь свежий токен sk. Возможно, Яндекс выдал капчу или куки устарели.")
             browser.close()
             sys.exit(1)
 
         fresh_sk = sk_match.group(1)
         print(f"[+] Успешно получен свежий токен sk: {fresh_sk}")
 
-        # 3. Считываем реальную текущую температуру и время генерации прогноза со страницы
         temp_val = 20
         temp_el = page.locator(".AppFactTemperature_value__2qhsG").first
         if temp_el.count() > 0:
@@ -128,7 +133,6 @@ def main():
 
         print(f"[*] Текущая погода в Батайске: {temp_val}°C | nowcast_gen_time: {nowcast_gen_time}")
 
-        # 4. Формируем и отправляем POST-запрос подтверждения прямо из контекста браузера
         rand_suffix = "".join(random.choices(string.ascii_lowercase + string.digits, k=11))
         report_id = f"mush{rand_suffix[:5]}.{rand_suffix}"
 
@@ -169,6 +173,7 @@ def main():
             """async ({ url, payload, stateTree }) => {
                 const r = await fetch(url, {
                     method: "POST",
+                    credentials: "include",
                     headers: {
                         "Accept": "text/x-component",
                         "Content-Type": "text/plain;charset=UTF-8",
@@ -184,7 +189,6 @@ def main():
 
         print(f"[+] Шаг 1 (Голос) -> HTTP {res1['status']} | Ответ: {res1['text'][:200]}")
 
-        # 5. Отправляем второй запрос фиксации состояния (afterReport)
         after_payload = [
             {
                 "page": "main",
@@ -204,6 +208,7 @@ def main():
             """async ({ url, payload, stateTree }) => {
                 const r = await fetch(url, {
                     method: "POST",
+                    credentials: "include",
                     headers: {
                         "Accept": "text/x-component",
                         "Content-Type": "text/plain;charset=UTF-8",
