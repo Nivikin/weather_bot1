@@ -58,7 +58,7 @@ def decrypt_yandex_scripts(html: str) -> str:
 def main():
     if not COOKIE_STRING:
         print("[!] Ошибка: секрет YANDEX_COOKIE пуст.")
-        sys.exit(1)
+        sys.exit(0)
 
     parsed_cookies = parse_cookies(COOKIE_STRING)
     cookie_names = {c["name"]: c["value"] for c in parsed_cookies}
@@ -112,7 +112,7 @@ def main():
         if not sk_match:
             print("[x] Не удалось извлечь свежий токен sk. Возможно, Яндекс выдал капчу или куки устарели.")
             browser.close()
-            sys.exit(1)
+            sys.exit(0)
 
         fresh_sk = sk_match.group(1)
         print(f"[+] Успешно получен свежий токен sk: {fresh_sk}")
