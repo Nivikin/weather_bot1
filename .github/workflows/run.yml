@@ -22,16 +22,22 @@ jobs:
         with:
           python-version: '3.11'
 
+      - name: Install Playwright package
+        run: pip install playwright
+
+      - name: Get Playwright version
+        id: pw-ver
+        run: echo "version=$(python -c 'import importlib.metadata; print(importlib.metadata.version("playwright"))')" >> "$GITHUB_OUTPUT"
+
       - name: Cache Playwright browsers
         id: playwright-cache
         uses: actions/cache@v4
         with:
           path: ~/.cache/ms-playwright
-          key: ${{ runner.os }}-playwright-chromium
+          key: ${{ runner.os }}-playwright-chromium-${{ steps.pw-ver.outputs.version }}
 
-      - name: Install Playwright
+      - name: Install Chromium & system deps
         run: |
-          pip install playwright
           if [ "${{ steps.playwright-cache.outputs.cache-hit }}" != "true" ]; then
             playwright install --with-deps chromium
           else
